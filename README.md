@@ -23,7 +23,7 @@ It talks to AppMetrica's real APIs, caches raw events locally in DuckDB when a q
 ## Features
 
 - 🔒 **Read-only by construction.** Every HTTP call is a `GET`. No write endpoint is ever called.
-- 🔑 **Token stays out of plaintext.** Stored in the OS credential store (macOS Keychain, Windows Credential Manager, Linux Secret Service) — never on disk, never printed, never logged.
+- 🔑 **Token stays out of plaintext.** Stored in the OS credential store (macOS Keychain, Windows Credential Manager, Linux Secret Service) — never written in plaintext, never printed, never logged.
 - 📊 **15 MCP tools** across discovery, ad-hoc reporting, preset reports, and raw-data analytics (funnels, deep retention, cohort comparison).
 - 🧠 **Local DuckDB cache** for anything the Reporting API can't answer directly — funnels and cohort-level retention are computed from cached raw events, not estimated.
 - 🗂️ **No hardcoded event taxonomy.** You tell it your event names (`level_start`, `iap_purchase`, whatever your game calls them); it never assumes a schema.
@@ -157,8 +157,8 @@ Plus two MCP prompt templates: `daily_analytics_check` and `compare_periods`.
 
 | Platform | Credential store | Verified |
 |---|---|---|
-| macOS | Keychain | Unit-tested (mocked backend); developed and manually exercised on macOS |
-| Linux | Secret Service | Unit-tested (mocked backend) |
+| macOS | Keychain | Unit-tested; verified manually against a real Keychain |
+| Linux | Secret Service | Unit-tested; verified manually in Docker against a real GNOME Keyring (login, read, delete) and without a keyring (clean refusal) |
 | Windows | Credential Manager | Unit-tested (mocked backend) only — not run on real Windows yet |
 
 - **CI / headless environments:** use `APPMETRICA_OAUTH_TOKEN` (env var) or `APPMETRICA_OAUTH_TOKEN_FILE` (a file that must be owned by the current user and have `600` permissions — checked before every read).
