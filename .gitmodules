@@ -1,0 +1,4 @@
+[submodule ".private"]
+	path = .private
+	url = https://github.com/ampersante/appmetrica-cli-private.git
+	branch = notes

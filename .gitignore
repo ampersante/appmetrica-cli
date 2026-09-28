@@ -1,0 +1,41 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# DuckDB cache files
+*.duckdb
+*.duckdb.wal
+.appmetrica_cache/
+
+# Environment
+.env
+
+# Data exports (may contain sensitive user data)
+*.csv
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# macOS
+.DS_Store
+
+# Local-only: Claude Code settings, real data exports
+.claude/
+export samples/
+
+# Kept local until reviewed by the owner before publishing
+.mcp.json
+
+# Working notes live in the private submodule .private/ — never at the repo root
+/session-handoff.md
+/tasks.md
+/journal.md
+/meta-journal.md
+/context.md
+/slice-*-plan.md
