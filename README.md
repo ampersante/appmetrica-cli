@@ -77,7 +77,7 @@ uv run appmetrica auth login
 # 3. Check it's working
 uv run appmetrica auth status
 
-# 4. Run a report, or start the MCP server
+# 4. Start the MCP server
 uv run appmetrica mcp
 ```
 
@@ -163,7 +163,7 @@ Plus two MCP prompt templates: `daily_analytics_check` and `compare_periods`.
 
 - **CI / headless environments:** use `APPMETRICA_OAUTH_TOKEN` (env var) or `APPMETRICA_OAUTH_TOKEN_FILE` (a file that must be owned by the current user and have `600` permissions — checked before every read).
 - **Scriptable failures.** Auth commands exit `2` (token rejected by the API), `3` (credential-store error), or `4` (configuration error), never a generic `1`, so wrapper scripts can branch on the actual cause.
-- **No hardcoded credential-store redirection.** Environment variables that could silently redirect keyring's backend (`PYTHON_KEYRING_BACKEND`, `KEYRING_PROPERTY_*`) are explicitly refused rather than honored.
+- **No silent credential-store redirection.** The OS store is pinned per platform: `PYTHON_KEYRING_BACKEND` and `keyringrc.cfg` are ignored, and any `KEYRING_PROPERTY_*` variable makes auth refuse to run (exit `4`) instead of letting it change where the token is written.
 
 ## Roadmap
 
@@ -173,6 +173,7 @@ Not available yet — do not assume these exist:
 - [ ] `appmetrica reconcile` for cache-vs-API consistency checks
 - [ ] Ad-hoc SQL query surface over the local cache
 - [ ] Packaged install (Homebrew / standalone binary) — for now, install from source with `uv`
+- [ ] Rework of the raw-data tools (`build_funnel_report`, `get_deep_retention`, `compare_cohorts_report`) on the new loader — they currently run on the legacy cache, which has known accuracy issues (funnel step windows, fuzzy source matching, session counting); treat their numbers as preliminary
 - [ ] License decision (see below)
 
 ## Contributing
