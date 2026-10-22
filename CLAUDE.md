@@ -1,3 +1,6 @@
+ticktick-list: 64ecf570ba9bd10472b02b9b — действия и сроки владельца из этой работы заносит скилл ticktick-tasks
+ticktick-tag: dev — тег области на каждом пункте этого проекта
+
 # CLAUDE.md
 
 ## Проект
