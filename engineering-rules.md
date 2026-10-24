@@ -24,17 +24,16 @@
 - Preset keys: короткие, без глагола — `traffic`, `retention`, `crashes`
 - Внутренние хелперы: `_prefix` — `_run_preset`, `_default_dates`, `_ensure_events_cached`
 
-### SQL в analytics.py
+### SQL в report.py / funnel.py / sandbox.py
 - CTE-based, не subqueries
-- Всегда `::TIMESTAMP` cast для datetime VARCHAR перед арифметикой с INTERVAL
-- `UBIGINT` для appmetrica_device_id
-- `ILIKE` для нечеткого поиска по tracker_name/source
+- Время и дни — готовые колонки `ts_utc` / `day` / `receive_day` из `AppStore.build()` (эффективное время D2); сырые `*_timestamp`/`*_datetime` — VARCHAR, для них арифметики нет
+- Значения в запросы — только через плейсхолдеры `?`
+- Совпадение имён/параметров — только строгое равенство (`=` / `json_extract_string`), никакого ILIKE и подстрок (аудит 2026-09-28 зафиксировал нечёткие совпадения как дефект)
 - `NULLIF(x, 0)` для деления — никогда не допускать division by zero
 
 ### Тесты
 - `respx` для мока HTTP (не unittest.mock)
-- `in_memory=True` DuckDB для тестов кэша и аналитики
-- Фикстуры в conftest.py через хелперы `_make_event()` / `_make_install()`
+- Синтетические данные — `tests/helpers.py`: `make_store()` + `build()` собирают Parquet-партиции и `analytics.duckdb` в tmp_path
 - Каждый тест — один assert-сценарий, имя теста описывает что проверяется
 
 ### Error handling
@@ -44,16 +43,16 @@
 
 ## Metric names
 
-Reporting API использует `ym:ge:` prefix. Часть имен верифицирована, часть — нет.
+Reporting API использует префиксы (`ym:ge:`, `ym:s:`, `ym:i:`, `ym:ce:`, `ym:cr:`); смешивать префиксы в одном запросе нельзя.
 
-Правило: при добавлении новой метрики в preset — пометить в `metrics.py` как VERIFIED или UNVERIFIED. Верификация = успешный запрос к реальному API.
+Каталог `metrics.py` содержит только имена, подтверждённые живым API (проверка E-038/E-040 от 2026-09-28); невалидные имена туда не возвращать. Новая метрика попадает в каталог только после успешного запроса к реальному API.
 
-## Кэширование
+## Хранилище сырых данных
 
-- Один DuckDB файл на app_id: `~/.appmetrica_cache/app_{id}.duckdb`
-- Append-only — не удаляем данные, не делаем upsert
-- Перед аналитическим запросом — проверка `get_cached_date_range()`, дозагрузка gap-ов
-- `sync_events` tool — явная синхронизация для batch-запросов
+- Партиции `<home>/apps/<id>/<table>/day=YYYY-MM-DD.parquet` — receive-день в таймзоне приложения; всё как вернул API (строки), IP-колонки не запрашиваются
+- Партиция заменяется целиком (whole-partition replace) — повторный `sync` безопасен, дубликатов не создаёт
+- «Закрытый» день = выгружен ≥24 ч после конца дня; sync довыгружает missing/open дни и последние 7 дней
+- Перед аналитикой — `sync` затем `build` (пересборка `analytics.duckdb` целиком, атомарная замена); читатели открывают базу read-only
 
 ## Что НЕ делать
 
