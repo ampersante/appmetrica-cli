@@ -82,26 +82,32 @@ brew install uv
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-Пошаговый гайд для не-разработчиков: [docs/setup-guide.md](./docs/setup-guide.md).
+Установите сам CLI (клон не нужен — команда `appmetrica` появится в `PATH`):
 
 ```bash
-# 1. Клонировать и установить
-git clone https://github.com/ampersante/appmetrica-cli.git
-cd appmetrica-cli
-uv sync
-
-# 2. Получить OAuth-токен AppMetrica (см. ниже), затем авторизоваться
-uv run appmetrica auth login
-
-# 3. Проверить, что всё работает
-uv run appmetrica auth status
-
-# 4. Узнать id своего приложения (нужен для sync/build/report)
-uv run appmetrica apps
-
-# 5. Запустить MCP-сервер
-uv run appmetrica mcp
+uv tool install git+https://github.com/ampersante/appmetrica-cli
+appmetrica --version
 ```
+
+Дальше:
+
+```bash
+# 1. Получить OAuth-токен AppMetrica (см. ниже), затем авторизоваться
+appmetrica auth login
+
+# 2. Проверить, что всё работает
+appmetrica auth status
+
+# 3. Узнать id своего приложения (нужен для sync/build/report)
+appmetrica apps
+
+# 4. Запустить MCP-сервер
+appmetrica mcp
+```
+
+Обновление потом: `uv tool upgrade appmetrica-cli`. Предпочитаете работать из исходников? `git clone` + `uv sync` + `uv run appmetrica …` — склонированный репозиторий также используется в примере конфигурации MCP ниже.
+
+Пошаговый гайд для не-разработчиков: [docs/setup-guide.md](./docs/setup-guide.md).
 
 ### Как получить OAuth-токен AppMetrica
 
@@ -210,7 +216,20 @@ $ appmetrica mcp
 
 ## Использование через MCP
 
-Добавьте сервер в конфиг вашего MCP-клиента (`.mcp.json` для Claude Code, конфиг Claude Desktop, Cursor и т.д.), указав в `--project` путь до склонированного репозитория:
+Добавьте сервер в конфиг вашего MCP-клиента (`.mcp.json` для Claude Code, конфиг Claude Desktop, Cursor и т.д.). Если CLI установлен через `uv tool install`, достаточно указать команду `appmetrica`:
+
+```json
+{
+  "mcpServers": {
+    "appmetrica": {
+      "command": "appmetrica",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Либо запускайте из склонированного репозитория, указав в `--project` путь до него:
 
 ```json
 {
@@ -266,7 +285,7 @@ $ appmetrica mcp
 Пока не реализовано — не считайте, что это уже доступно:
 
 - [ ] Проверка на живом аккаунте Logs API: перекрёстная сверка локальных DAU, сессий, установок и воронок с собственными отчётами AppMetrica
-- [ ] Пакетная установка (Homebrew / отдельный бинарник) — пока установка только из исходников через `uv`
+- [ ] Формула Homebrew (свой tap) — до тех пор: `uv tool install git+https://github.com/ampersante/appmetrica-cli`
 - [ ] Проверка Credential Manager на реальной Windows (пока только юнит-тесты с мок-бэкендом)
 - [ ] Выбор лицензии (см. ниже)
 

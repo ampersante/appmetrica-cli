@@ -82,26 +82,32 @@ brew install uv
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-Step-by-step guide for non-developers (in Russian): [docs/setup-guide.md](./docs/setup-guide.md).
+Install the CLI itself (no clone needed — puts `appmetrica` on your `PATH`):
 
 ```bash
-# 1. Clone and install
-git clone https://github.com/ampersante/appmetrica-cli.git
-cd appmetrica-cli
-uv sync
-
-# 2. Get an AppMetrica OAuth token (see below), then log in
-uv run appmetrica auth login
-
-# 3. Check it's working
-uv run appmetrica auth status
-
-# 4. Find your app id (needed by sync/build/report)
-uv run appmetrica apps
-
-# 5. Start the MCP server
-uv run appmetrica mcp
+uv tool install git+https://github.com/ampersante/appmetrica-cli
+appmetrica --version
 ```
+
+Then:
+
+```bash
+# 1. Get an AppMetrica OAuth token (see below), then log in
+appmetrica auth login
+
+# 2. Check it's working
+appmetrica auth status
+
+# 3. Find your app id (needed by sync/build/report)
+appmetrica apps
+
+# 4. Start the MCP server
+appmetrica mcp
+```
+
+Update later with `uv tool upgrade appmetrica-cli`. Prefer running from source? `git clone` + `uv sync` + `uv run appmetrica …` — the cloned repo is also what the MCP config example below points at.
+
+Step-by-step guide for non-developers (in Russian): [docs/setup-guide.md](./docs/setup-guide.md).
 
 ### Getting an AppMetrica OAuth token
 
@@ -210,7 +216,20 @@ Data lives under `~/.appmetrica-cli/apps/<app_id>/`: one Parquet file per table 
 
 ## MCP usage
 
-Add the server to your MCP client config (Claude Code `.mcp.json`, Claude Desktop config, Cursor, etc.), pointing `--project` at wherever you cloned the repo:
+Add the server to your MCP client config (Claude Code `.mcp.json`, Claude Desktop config, Cursor, etc.). If you installed the CLI with `uv tool install`, just point at the `appmetrica` command:
+
+```json
+{
+  "mcpServers": {
+    "appmetrica": {
+      "command": "appmetrica",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Or run it from a cloned repo with `--project` pointed at wherever you cloned it:
 
 ```json
 {
@@ -265,7 +284,7 @@ The local-store tools work on what you have synced: `sync` fetches Logs API part
 
 Not available yet — do not assume these exist:
 
-- [ ] Packaged install (Homebrew / standalone binary) — for now, install from source with `uv`
+- [ ] Homebrew formula (own tap) — until then: `uv tool install git+https://github.com/ampersante/appmetrica-cli`
 - [ ] Verification against a live Logs API account: cross-check local DAU, sessions, installs and funnel numbers with AppMetrica's own reports
 - [ ] Windows live check of the Credential Manager backend (unit-tested with a mocked backend only so far)
 - [ ] License decision (see below)
