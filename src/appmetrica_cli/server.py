@@ -11,17 +11,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from appmetrica_cli import service
-from appmetrica_cli.analytics import (
-    build_funnel as _analytics_funnel,
-    compare_cohorts,
-    compute_retention,
-)
 from appmetrica_cli.auth import AuthError
-from appmetrica_cli.cache import (
-    EVENTS_FIELDS,
-    INSTALLATIONS_FIELDS,
-    EventCache,
-)
 from appmetrica_cli.client import AppMetricaClient, AppMetricaError
 from appmetrica_cli.config import AppMetricaConfig, home_dir
 from appmetrica_cli.funnel import parse_window
@@ -51,22 +41,20 @@ async def app_lifespan(server):
         timeout=httpx.Timeout(config.request_timeout),
     )
     client = AppMetricaClient(http_client, config)
-    cache = EventCache(config.cache_dir)
     try:
-        yield {"client": client, "cache": cache, "config": config}
+        yield {"client": client, "config": config}
     finally:
-        cache.close_all()
         await http_client.aclose()
 
 
 mcp = FastMCP(
     name="AppMetrica Analytics",
     instructions=(
-        "Game analytics MCP for AppMetrica. Read-only access to metrics, events, "
-        "funnels, retention, and cohort analysis. Use list_apps to find app IDs, "
-        "then query reports or build funnels. For complex analytics (funnels, deep "
-        "retention, cohort comparison), data is cached locally in DuckDB — first "
-        "query may take longer while syncing from Logs API."
+        "Game analytics MCP for AppMetrica. Reporting tools query the API "
+        "directly. Local tools work over the store on this machine: run sync "
+        "to fetch Logs API partitions, build to rebuild the analytics database, "
+        "then call the daily, retention, revenue, funnel, SQL and event tools. "
+        "Use list_apps to find app IDs."
     ),
     lifespan=app_lifespan,
 )
@@ -115,32 +103,6 @@ def _steps(value: str | list) -> list:
     if not isinstance(value, list) or not value:
         raise ValueError("steps must be a non-empty list or a JSON list")
     return [{"event_name": step} if isinstance(step, str) else step for step in value]
-
-
-async def _ensure_events_cached(
-    ctx: Context, app_id: int, date_from: str, date_to: str
-) -> None:
-    cache: EventCache = ctx.lifespan_context["cache"]
-    client: AppMetricaClient = ctx.lifespan_context["client"]
-    cached = cache.get_cached_date_range(app_id, "events")
-    if not cached or date_from < cached[0] or date_to > cached[1]:
-        events = await client.export_logs(
-            app_id, "events", EVENTS_FIELDS, date_from, date_to
-        )
-        cache.store_events(app_id, events)
-
-
-async def _ensure_installations_cached(
-    ctx: Context, app_id: int, date_from: str, date_to: str
-) -> None:
-    cache: EventCache = ctx.lifespan_context["cache"]
-    client: AppMetricaClient = ctx.lifespan_context["client"]
-    cached = cache.get_cached_date_range(app_id, "installations")
-    if not cached or date_from < cached[0] or date_to > cached[1]:
-        data = await client.export_logs(
-            app_id, "installations", INSTALLATIONS_FIELDS, date_from, date_to
-        )
-        cache.store_installations(app_id, data)
 
 
 async def _run_preset(
@@ -629,168 +591,6 @@ async def reconcile(
         "matched_days": result.matched_days,
         "mismatched_days": result.mismatched_days,
     }
-
-
-# ══════════════════════════════════════════════════════════════════════
-#  ADVANCED ANALYTICS TOOLS (Logs API + DuckDB)
-# ══════════════════════════════════════════════════════════════════════
-
-
-@mcp.tool(annotations=READ_ONLY)
-async def build_funnel_report(
-    app_id: Annotated[int, "AppMetrica application ID"],
-    steps: Annotated[
-        list[str],
-        "Event names in funnel order, e.g. ['tutorial_start', 'tutorial_complete', 'first_purchase']",
-    ],
-    date_from: Annotated[str, "Start date YYYY-MM-DD"],
-    date_to: Annotated[str, "End date YYYY-MM-DD"],
-    country: Annotated[str | None, "Filter by country ISO code, e.g. 'US'"] = None,
-    source: Annotated[str | None, "Filter by traffic source/tracker name"] = None,
-    time_window_hours: Annotated[
-        int, Field(description="Max hours between first and last step", ge=1, le=720)
-    ] = 48,
-    ctx: Context = None,
-) -> dict:
-    """Build event funnel from raw data. First call syncs events from Logs API (may take time).
-
-    Returns users per step, conversion rates, and drop-off.
-    """
-    try:
-        await _ensure_events_cached(ctx, app_id, date_from, date_to)
-        if source:
-            await _ensure_installations_cached(ctx, app_id, date_from, date_to)
-    except AppMetricaError as e:
-        return {"error": f"Failed to sync data: {e.message}", "status_code": e.status_code}
-
-    cache: EventCache = ctx.lifespan_context["cache"]
-    db = cache._get_db(app_id)
-    step_dicts = [{"event_name": s} for s in steps]
-    return _analytics_funnel(db, step_dicts, date_from, date_to, country, source, time_window_hours)
-
-
-@mcp.tool(annotations=READ_ONLY)
-async def compare_cohorts_report(
-    app_id: Annotated[int, "AppMetrica application ID"],
-    cohort_a: Annotated[
-        dict, "Filters for cohort A, e.g. {'country': 'US', 'source': 'facebook'}"
-    ],
-    cohort_b: Annotated[
-        dict, "Filters for cohort B, e.g. {'country': 'US', 'source': 'applovin'}"
-    ],
-    metrics: Annotated[
-        list[str],
-        "Metrics to compare: retention_d1, retention_d7, avg_sessions, total_events, user_count",
-    ],
-    date_from: Annotated[str, "Cohort install date start YYYY-MM-DD"],
-    date_to: Annotated[str, "Cohort install date end YYYY-MM-DD"],
-    ctx: Context = None,
-) -> list[dict]:
-    """Compare two user cohorts side-by-side. Syncs raw data on first call."""
-    try:
-        await _ensure_events_cached(ctx, app_id, date_from, date_to)
-        await _ensure_installations_cached(ctx, app_id, date_from, date_to)
-    except AppMetricaError as e:
-        return [{"error": f"Failed to sync data: {e.message}"}]
-
-    cache: EventCache = ctx.lifespan_context["cache"]
-    db = cache._get_db(app_id)
-    return compare_cohorts(db, cohort_a, cohort_b, metrics, date_from, date_to)
-
-
-@mcp.tool(annotations=READ_ONLY)
-async def get_deep_retention(
-    app_id: Annotated[int, "AppMetrica application ID"],
-    days: Annotated[list[int], "Retention days, e.g. [1, 3, 7, 14, 28]"],
-    cohort_from: Annotated[str, "Cohort start date YYYY-MM-DD"],
-    cohort_to: Annotated[str, "Cohort end date YYYY-MM-DD"],
-    country: Annotated[str | None, "Filter by country ISO code"] = None,
-    source: Annotated[str | None, "Filter by traffic source/tracker name"] = None,
-    ratio: Annotated[
-        str | None,
-        "Compute ratio between two days, e.g. 'd3/d1' → D3 retention / D1 retention",
-    ] = None,
-    ctx: Context = None,
-) -> dict:
-    """Deep retention from raw data. Supports any day combo, source/geo filters, ratios.
-
-    First call syncs events + installations from Logs API.
-    """
-    try:
-        await _ensure_events_cached(ctx, app_id, cohort_from, cohort_to)
-        await _ensure_installations_cached(ctx, app_id, cohort_from, cohort_to)
-    except AppMetricaError as e:
-        return {"error": f"Failed to sync data: {e.message}"}
-
-    cache: EventCache = ctx.lifespan_context["cache"]
-    db = cache._get_db(app_id)
-    retention_data = compute_retention(db, days, cohort_from, cohort_to, country, source)
-
-    result: dict = {"retention": retention_data}
-
-    if ratio:
-        parts = ratio.lower().replace(" ", "").split("/")
-        if len(parts) == 2:
-            num_day = int(parts[0].lstrip("d"))
-            den_day = int(parts[1].lstrip("d"))
-            ratios = []
-            for row in retention_data:
-                num_val = row["retention"].get(num_day, 0.0)
-                den_val = row["retention"].get(den_day, 0.0)
-                r = (num_val / den_val) if den_val > 0 else 0.0
-                ratios.append({
-                    "cohort_date": row["cohort_date"],
-                    "ratio": round(r, 4),
-                    f"d{num_day}": num_val,
-                    f"d{den_day}": den_val,
-                })
-            result["ratio"] = {
-                "formula": ratio,
-                "data": ratios,
-                "average": round(
-                    sum(r["ratio"] for r in ratios) / len(ratios), 4
-                )
-                if ratios
-                else 0.0,
-            }
-
-    return result
-
-
-@mcp.tool(annotations=READ_ONLY)
-async def sync_events(
-    app_id: Annotated[int, "AppMetrica application ID"],
-    date_from: Annotated[str, "Start date YYYY-MM-DD"],
-    date_to: Annotated[str, "End date YYYY-MM-DD"],
-    tables: Annotated[
-        list[str],
-        "Tables to sync: events, installations",
-    ] = ["events", "installations"],
-    ctx: Context = None,
-) -> dict:
-    """Sync raw data from Logs API into local DuckDB cache.
-
-    Run before multiple funnel/retention queries to avoid repeated syncs.
-    """
-    synced = []
-    errors = []
-    for table in tables:
-        try:
-            if table == "events":
-                await _ensure_events_cached(ctx, app_id, date_from, date_to)
-            elif table == "installations":
-                await _ensure_installations_cached(ctx, app_id, date_from, date_to)
-            synced.append(table)
-        except AppMetricaError as e:
-            errors.append({"table": table, "error": e.message})
-
-    cache: EventCache = ctx.lifespan_context["cache"]
-    ranges = {}
-    for table in tables:
-        r = cache.get_cached_date_range(app_id, table)
-        ranges[table] = {"from": r[0], "to": r[1]} if r else None
-
-    return {"synced": synced, "errors": errors, "cached_ranges": ranges}
 
 
 # ══════════════════════════════════════════════════════════════════════
