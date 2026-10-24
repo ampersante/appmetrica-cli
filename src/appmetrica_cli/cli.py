@@ -14,6 +14,7 @@ import httpx
 from appmetrica_cli import auth, service
 from appmetrica_cli.client import AppMetricaClient, AppMetricaError
 from appmetrica_cli.config import AppMetricaConfig, home_dir
+from appmetrica_cli.funnel import parse_window
 from appmetrica_cli.fx import FxError
 from appmetrica_cli.sandbox import SandboxError
 from appmetrica_cli.service import ServiceError
@@ -72,11 +73,10 @@ def _int_list(text: str, option: str) -> tuple[int, ...]:
 
 
 def _window(text: str) -> timedelta:
-    suffix = text[-1:]
-    unit = {"d": "days", "h": "hours", "m": "minutes", "s": "seconds"}.get(suffix)
-    if unit is None or not text[:-1].isdigit() or int(text[:-1]) <= 0:
-        _err(f"--window must look like 7d, 24h, 30m or 45s, got {text!r}", 2)
-    return timedelta(**{unit: int(text[:-1])})
+    try:
+        return parse_window(text)
+    except ValueError as e:
+        _err(f"--{e}", 2)
 
 
 @click.group()

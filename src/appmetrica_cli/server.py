@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 from typing import Annotated
 
@@ -9,18 +10,24 @@ from fastmcp.server.lifespan import lifespan
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from appmetrica_cli import service
 from appmetrica_cli.analytics import (
-    build_funnel,
+    build_funnel as _analytics_funnel,
     compare_cohorts,
     compute_retention,
 )
+from appmetrica_cli.auth import AuthError
 from appmetrica_cli.cache import (
     EVENTS_FIELDS,
     INSTALLATIONS_FIELDS,
     EventCache,
 )
 from appmetrica_cli.client import AppMetricaClient, AppMetricaError
-from appmetrica_cli.config import AppMetricaConfig
+from appmetrica_cli.config import AppMetricaConfig, home_dir
+from appmetrica_cli.funnel import parse_window
+from appmetrica_cli.fx import FxError
+from appmetrica_cli.sandbox import SandboxError
+from appmetrica_cli.storage import StorageError
 from appmetrica_cli.metrics import (
     DIMENSIONS,
     METRICS,
@@ -74,6 +81,40 @@ def _default_dates(
     d2 = date_to or (date.today() - timedelta(days=1)).isoformat()
     d1 = date_from or (date.fromisoformat(d2) - timedelta(days=29)).isoformat()
     return d1, d2
+
+
+_LOCAL_ERRORS = (
+    service.ServiceError,
+    SandboxError,
+    StorageError,
+    FxError,
+    ValueError,
+    TypeError,
+)
+
+
+def _local_error(exc: BaseException) -> dict:
+    return {"error": getattr(exc, "message", None) or str(exc), "status_code": 400}
+
+
+def _date(value: str | None, name: str) -> date | None:
+    if value is None or value == "":
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise ValueError(f"{name} must be a YYYY-MM-DD date, got {value!r}") from None
+
+
+def _steps(value: str | list) -> list:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"steps is not valid JSON: {e.msg}") from None
+    if not isinstance(value, list) or not value:
+        raise ValueError("steps must be a non-empty list or a JSON list")
+    return [{"event_name": step} if isinstance(step, str) else step for step in value]
 
 
 async def _ensure_events_cached(
@@ -311,6 +352,286 @@ async def get_versions(
 
 
 # ══════════════════════════════════════════════════════════════════════
+#  LOCAL STORE TOOLS (sync → build → reports over analytics.duckdb)
+# ══════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def sync(
+    app_id: Annotated[int, "AppMetrica application ID"],
+    from_: Annotated[str, "First day to fetch, YYYY-MM-DD"],
+    to_: Annotated[str, "Last day to fetch, YYYY-MM-DD"],
+    tables: Annotated[
+        list[str] | None,
+        "Tables: events, sessions_starts, installations, revenue_events, ad_revenue_events (default: all)",
+    ] = None,
+) -> dict:
+    """Fetch Logs API partitions into the local store. Run build afterwards."""
+    try:
+        config = AppMetricaConfig.from_env()
+        report = await service.sync_app(
+            config, app_id, _date(from_, "from_"), _date(to_, "to_"), tables=tables
+        )
+    except AuthError as e:
+        return _local_error(e)
+    except AppMetricaError as e:
+        return {"error": e.message, "status_code": e.status_code}
+    except _LOCAL_ERRORS as e:
+        return _local_error(e)
+    return {
+        "fetched": [
+            {"table": table, "day": day, "rows": rows}
+            for table, day, rows in report.fetched
+        ],
+        "skipped_closed": report.skipped_closed,
+        "error": report.error,
+    }
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def build(app_id: Annotated[int, "AppMetrica application ID"]) -> dict:
+    """Rebuild the local analytics database from the stored partitions; returns row counts."""
+    try:
+        return service.build_app(home_dir(), app_id)
+    except _LOCAL_ERRORS as e:
+        return _local_error(e)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_daily_metrics(
+    app_id: Annotated[int, "AppMetrica application ID"],
+    from_: Annotated[str | None, "First day YYYY-MM-DD (default: no limit)"] = None,
+    to_: Annotated[str | None, "Last day YYYY-MM-DD (default: no limit)"] = None,
+) -> list[dict]:
+    """DAU, sessions and installs per day from the local store."""
+    try:
+        rows = service.daily_report(
+            home_dir(), app_id, _date(from_, "from_"), _date(to_, "to_")
+        )
+    except _LOCAL_ERRORS as e:
+        return [_local_error(e)]
+    return [
+        {"day": row.day.isoformat(), "dau": row.dau, "sessions": row.sessions, "installs": row.installs}
+        for row in rows
+    ]
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_retention(
+    app_id: Annotated[int, "AppMetrica application ID"],
+    days: Annotated[list[int] | None, "Retention offsets, e.g. [1, 7, 30]"] = None,
+    from_: Annotated[str | None, "First cohort day YYYY-MM-DD (default: no limit)"] = None,
+    to_: Annotated[str | None, "Last cohort day YYYY-MM-DD (default: no limit)"] = None,
+) -> dict:
+    """Classic D-N retention per non-reinstall install cohort from the local store."""
+    try:
+        result = service.retention_report(
+            home_dir(), app_id, tuple(days or (1, 7)),
+            _date(from_, "from_"), _date(to_, "to_"),
+        )
+    except _LOCAL_ERRORS as e:
+        return _local_error(e)
+    return {
+        "days": list(result.days),
+        "cohorts": [
+            {
+                "day": cohort.day.isoformat(),
+                "size": cohort.size,
+                "returned": {str(n): value for n, value in cohort.returned.items()},
+            }
+            for cohort in result.cohorts
+        ],
+        "immature": {str(n): value for n, value in result.immature.items()},
+    }
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_iap_revenue(
+    app_id: Annotated[int, "AppMetrica application ID"],
+    from_: Annotated[str | None, "First day YYYY-MM-DD (default: no limit)"] = None,
+    to_: Annotated[str | None, "Last day YYYY-MM-DD (default: no limit)"] = None,
+) -> list[dict]:
+    """IAP revenue in USD per day from the local store, plus excluded rows."""
+    try:
+        rows = await service.iap_report(
+            home_dir(), app_id, _date(from_, "from_"), _date(to_, "to_")
+        )
+    except _LOCAL_ERRORS as e:
+        return [_local_error(e)]
+    return [
+        {
+            "day": row.day.isoformat(),
+            "events": row.events,
+            "gross_usd": str(row.gross_usd),
+            "excluded": {
+                bucket: [
+                    {"currency": b.currency, "events": b.events, "amount": str(b.amount)}
+                    for b in buckets
+                ]
+                for bucket, buckets in row.excluded.items()
+            },
+        }
+        for row in rows
+    ]
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_ad_revenue(
+    app_id: Annotated[int, "AppMetrica application ID"],
+    from_: Annotated[str | None, "First day YYYY-MM-DD (default: no limit)"] = None,
+    to_: Annotated[str | None, "Last day YYYY-MM-DD (default: no limit)"] = None,
+    by_network: Annotated[bool, "Split each day by ad network"] = False,
+) -> list[dict]:
+    """Ad revenue per day and original currency from the local store, never converted."""
+    try:
+        rows = service.ad_report(
+            home_dir(), app_id, _date(from_, "from_"), _date(to_, "to_"),
+            by_network=by_network,
+        )
+    except _LOCAL_ERRORS as e:
+        return [_local_error(e)]
+    return [
+        {
+            "day": row.day.isoformat(),
+            "currency": row.currency,
+            "network": row.network,
+            "events": row.events,
+            "amount": row.amount,
+        }
+        for row in rows
+    ]
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def build_funnel(
+    app_id: Annotated[int, "AppMetrica application ID"],
+    steps: Annotated[
+        str | list,
+        'Event names in order, e.g. ["open", "buy"], or JSON: '
+        '[{"event_name": "open", "params": {"level": "3"}}]',
+    ],
+    window: Annotated[str, "Entry window: 7d, 24h, 30m or 45s"] = "7d",
+) -> dict:
+    """Device-level funnel over loaded events; the window is measured from the entry."""
+    try:
+        result = service.funnel_report(
+            home_dir(), app_id, _steps(steps), parse_window(window)
+        )
+    except _LOCAL_ERRORS as e:
+        return _local_error(e)
+    return {
+        "entries": result.entries,
+        "immature_entries": result.immature_entries,
+        "steps": [
+            {
+                "index": row.index,
+                "event_name": row.event_name,
+                "devices": row.devices,
+                "step_conversion": row.step_conversion,
+                "entry_conversion": row.entry_conversion,
+            }
+            for row in result.steps
+        ],
+    }
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def run_sql(
+    app_id: Annotated[int, "AppMetrica application ID"],
+    sql: Annotated[str, "One read-only SELECT or WITH statement"],
+) -> dict:
+    """Run one read-only SELECT/WITH statement over the local analytics database.
+
+    Limits: exactly one statement, at most 10,000 rows returned, 60 s run time.
+    """
+    try:
+        result = service.sql_query(home_dir(), app_id, sql)
+    except _LOCAL_ERRORS as e:
+        return _local_error(e)
+    return {
+        "columns": list(result.columns),
+        "rows": [list(row) for row in result.rows],
+        "truncated": result.truncated,
+    }
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def list_events(app_id: Annotated[int, "AppMetrica application ID"]) -> list[dict]:
+    """Every event loaded in the local store with volume, reach and day span."""
+    try:
+        rows = service.events_overview(home_dir(), app_id)
+    except _LOCAL_ERRORS as e:
+        return [_local_error(e)]
+    return [
+        {
+            "event_name": row.event_name,
+            "rows": row.rows,
+            "devices": row.devices,
+            "first_day": row.first_day.isoformat() if row.first_day else None,
+            "last_day": row.last_day.isoformat() if row.last_day else None,
+        }
+        for row in rows
+    ]
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def explore_event_params(
+    app_id: Annotated[int, "AppMetrica application ID"],
+    event_name: Annotated[str, "Event name to inspect"],
+) -> dict:
+    """First-level parameters of one event: value types and top 10 values."""
+    try:
+        rows = service.event_params(home_dir(), app_id, event_name)
+    except _LOCAL_ERRORS as e:
+        return _local_error(e)
+    return {
+        "event": event_name,
+        "parameters": [
+            {
+                "key": row.key,
+                "rows": row.rows,
+                "types": row.types,
+                "top_values": [
+                    {"value": value, "count": count} for value, count in row.top_values
+                ],
+            }
+            for row in rows
+        ],
+    }
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def reconcile(
+    app_id: Annotated[int, "AppMetrica application ID"],
+    from_: Annotated[str, "First day YYYY-MM-DD"],
+    to_: Annotated[str, "Last day YYYY-MM-DD"],
+) -> dict:
+    """Compare local DAU, sessions and installs per day with the Reporting API."""
+    try:
+        config = AppMetricaConfig.from_env()
+        result = await service.reconcile_a1(
+            config, home_dir(), app_id, _date(from_, "from_"), _date(to_, "to_")
+        )
+    except AuthError as e:
+        return _local_error(e)
+    except AppMetricaError as e:
+        return {"error": e.message, "status_code": e.status_code}
+    except _LOCAL_ERRORS as e:
+        return _local_error(e)
+    return {
+        "days": {
+            day.isoformat(): {
+                metric: {"ours": c.ours, "appmetrica": c.appmetrica, "diff": c.diff}
+                for metric, c in comparisons.items()
+            }
+            for day, comparisons in result.days.items()
+        },
+        "matched_days": result.matched_days,
+        "mismatched_days": result.mismatched_days,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════
 #  ADVANCED ANALYTICS TOOLS (Logs API + DuckDB)
 # ══════════════════════════════════════════════════════════════════════
 
@@ -345,7 +666,7 @@ async def build_funnel_report(
     cache: EventCache = ctx.lifespan_context["cache"]
     db = cache._get_db(app_id)
     step_dicts = [{"event_name": s} for s in steps]
-    return build_funnel(db, step_dicts, date_from, date_to, country, source, time_window_hours)
+    return _analytics_funnel(db, step_dicts, date_from, date_to, country, source, time_window_hours)
 
 
 @mcp.tool(annotations=READ_ONLY)

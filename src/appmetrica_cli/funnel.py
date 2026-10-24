@@ -44,6 +44,15 @@ class FunnelResult:
     immature_entries: int  # entries excluded because their window is not observable
 
 
+def parse_window(text: str) -> timedelta:
+    """Parse ``7d``, ``24h``, ``30m`` or ``45s`` into a positive timedelta."""
+    suffix = text[-1:]
+    unit = {"d": "days", "h": "hours", "m": "minutes", "s": "seconds"}.get(suffix)
+    if unit is None or not text[:-1].isdigit() or int(text[:-1]) <= 0:
+        raise ValueError(f"window must look like 7d, 24h, 30m or 45s, got {text!r}")
+    return timedelta(**{unit: int(text[:-1])})
+
+
 def funnel(
     store: AppStore,
     steps: Sequence[FunnelStep | Mapping[str, Any]],
