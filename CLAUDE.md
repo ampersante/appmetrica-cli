@@ -5,14 +5,16 @@ ticktick-tag: dev — тег области на каждом пункте эт�
 
 ## Проект
 
-AppMetrica MCP — read-only Python MCP-сервер для game analytics поверх AppMetrica API. Позволяет задавать аналитические вопросы на естественном языке из Claude Code/Desktop/Cursor.
+AppMetrica CLI — read-only Python-инструмент для game analytics поверх AppMetrica API. CLI-first: общее ядро (`service.py`) используют и терминал (`appmetrica`), и MCP-сервер (`appmetrica mcp`). MCP — тонкий адаптер, а не отдельная реализация. Сырые данные лежат в Parquet-партициях, из которых пересобирается локальная `analytics.duckdb`.
 
 ## Быстрый старт разработки
 
 ```bash
-uv sync --extra dev      # установить зависимости
-uv run pytest -v         # запустить тесты (30 штук)
-uv run python -m appmetrica_mcp  # запустить MCP-сервер (нужен APPMETRICA_OAUTH_TOKEN)
+uv sync --extra dev          # установить зависимости
+uv run pytest -v             # запустить тесты
+uv run appmetrica auth login # сохранить токен в системное хранилище
+uv run appmetrica --help     # список команд
+uv run appmetrica mcp        # запустить MCP-сервер по stdio
 ```
 
 ## Маршрутизация файлов
@@ -58,20 +60,28 @@ uv run python -m appmetrica_mcp  # запустить MCP-сервер (нуже
 ## Структура проекта
 
 ```
-src/appmetrica_mcp/
-  server.py       ← 16 tools, lifespan, все MCP-определения
-  client.py       ← HTTP-клиент (Management + Reporting + Logs API)
-  cache.py        ← DuckDB кэш сырых событий/установок
-  analytics.py    ← воронки, retention, когорты (чистые SQL-функции)
-  metrics.py      ← каталог ym:ge: метрик + preset-отчеты
-  models.py       ← Pydantic-модели ответов
-  config.py       ← конфигурация из env
+src/appmetrica_cli/
+  cli.py          ← click-команды `appmetrica`: auth, sync, build, отчёты, sql, mcp
+  server.py       ← FastMCP: Reporting- и локальные тулы, 2 prompt
+  service.py      ← общее ядро: sync, build, локальные отчёты, reconcile
+  client.py       ← HTTP-клиент Management + Reporting + Logs API
+  loader.py       ← синхронизация Logs API в партиции
+  storage.py      ← Parquet-партиции, state.json, сборка analytics.duckdb
+  db.py           ← read-only подключение к analytics.duckdb
+  report.py       ← DAU, sessions, installs, retention, IAP и ad revenue
+  funnel.py       ← воронки на уровне устройства
+  sandbox.py      ← read-only SQL с таймаутом и лимитом строк
+  discover.py     ← список событий и их параметров
+  fx.py           ← курсы ECB и конвертация в USD
+  metrics.py      ← каталог Reporting-метрик и пресетов
+  config.py       ← конфигурация из env, home_dir()
+  auth.py         ← токен: OS-хранилище, env, защищённый файл
+  __main__.py     ← запуск через python -m appmetrica_cli
 tests/
-  conftest.py     ← фикстуры: _make_event(), _make_install(), in-memory DuckDB
-  test_client.py  ← respx-моки HTTP
-  test_cache.py   ← DuckDB store/query
-  test_analytics.py ← воронки, retention, когорты
-  test_tools.py   ← валидация presets и каталога метрик
+  conftest.py     ← общие фикстуры
+  helpers.py      ← синтетические партиции и сборка store
+  test_*.py       ← по модулям: auth, cli, client, discover, funnel, fx,
+                    mcp_tools, report, sandbox, service, storage, tools
 ```
 
 ## Правила
@@ -85,7 +95,7 @@ tests/
 ### Код
 - `from __future__ import annotations` в каждом модуле
 - Tools: `Annotated[type, "description"]` для параметров, `annotations=READ_ONLY` обязательно
-- SQL: CTE-based, `::TIMESTAMP` cast для datetime, `UBIGINT` для device_id
+- SQL: CTE-based; значения — только через `?`; время и день — готовые `ts_utc`/`day` из `build()`, сырые колонки — VARCHAR
 - Ошибки: `AppMetricaError` → `{"error": ..., "status_code": ...}` dict, не исключения на уровне tool
 
 ### AppMetrica API
@@ -95,8 +105,9 @@ tests/
 - Logs API: async (202 → poll 10s → 200), timeout 5 min
 - Rate: 30 req/sec, 5000 req/day
 
-### DuckDB-схема
-- Определена в `cache.py`, откалибрована по реальным CSV-экспортам
-- Events: 33 поля, Installations: 43 поля
-- `appmetrica_device_id` — UBIGINT (значения > INT64)
-- Datetime хранится как VARCHAR, кастится в TIMESTAMP при аналитических запросах
+### analytics.duckdb
+- Собирается `AppStore.build()` из Parquet-партиций в `<home>/apps/<id>/analytics.duckdb` и публикуется атомарно
+- Исходные колонки — VARCHAR ровно в том виде, как их вернул API; IP-колонки не запрашиваются
+- Вычисляемые колонки: `ts_device_utc`, `ts_receive_utc`, `ts_utc` (эффективное время D2: device, если оно не больше 5 минут впереди и не больше 7 дней позади receive, иначе receive), `time_fixed`, `day`, `receive_day`
+- `day` и `receive_day` — дни в часовом поясе приложения; `app_meta` хранит `app_id` и `time_zone`
+- Отчёты открывают базу read-only; после `sync` нужен `build`
