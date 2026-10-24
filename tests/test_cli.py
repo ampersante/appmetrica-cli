@@ -178,6 +178,33 @@ def test_report_without_build_fails(tmp_path, monkeypatch):
     assert "run build" in result.stderr
 
 
+def test_apps_requires_token(monkeypatch):
+    monkeypatch.setattr(config_module, "get_token", lambda: (None, "none"))
+    result = _invoke("apps")
+    assert result.exit_code == 2
+    assert "No AppMetrica token" in result.stderr
+
+
+@respx.mock
+def test_apps_lists_applications(monkeypatch):
+    monkeypatch.setenv("APPMETRICA_OAUTH_TOKEN", "test-token")
+    respx.get(MANAGEMENT_URL).respond(
+        json={
+            "applications": [
+                {"id": 42, "name": "My Game", "time_zone_name": "Europe/Berlin"},
+                {"id": 43, "name": "My Game (iOS)", "time_zone_name": "Europe/Berlin"},
+            ]
+        }
+    )
+
+    data = _json(_invoke("apps"))
+
+    assert data == [
+        {"id": 42, "name": "My Game", "time_zone_name": "Europe/Berlin"},
+        {"id": 43, "name": "My Game (iOS)", "time_zone_name": "Europe/Berlin"},
+    ]
+
+
 def test_sync_requires_token(monkeypatch):
     monkeypatch.setattr(config_module, "get_token", lambda: (None, "none"))
     result = _invoke("sync", "--app", "1")

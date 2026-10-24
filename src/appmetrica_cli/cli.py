@@ -157,6 +157,29 @@ def auth_logout() -> None:
     _out(result)
 
 
+@main.command("apps")
+def apps_command() -> None:
+    """List applications available to the token (needs a token)."""
+    try:
+        config = AppMetricaConfig.from_env()
+    except auth.AuthError as e:
+        _err(e.message, e.exit_code)
+    try:
+        apps = asyncio.run(_list_apps(config.oauth_token))
+    except AppMetricaError as e:
+        _err(e.message, auth.EXIT_API_REJECTED)
+    _out(
+        [
+            {
+                "id": app.get("id"),
+                "name": app.get("name"),
+                "time_zone_name": app.get("time_zone_name"),
+            }
+            for app in apps
+        ]
+    )
+
+
 @main.command("sync")
 @click.option("--app", "app_id", type=int, required=True, help="AppMetrica application id.")
 @click.option(
