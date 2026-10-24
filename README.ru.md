@@ -68,7 +68,14 @@ flowchart LR
 
 ## Быстрый старт
 
-Нужен [uv](https://docs.astral.sh/uv/) — он сам установит требуемый проектом Python ≥3.10.
+**macOS с Homebrew** — самый короткий путь, больше ничего ставить не нужно:
+
+```bash
+brew install ampersante/tap/appmetrica-cli
+appmetrica --version
+```
+
+**Любая платформа с [uv](https://docs.astral.sh/uv/)** — сначала установите uv (он же поставит требуемый проектом Python ≥3.10):
 
 ```bash
 # macOS или Linux
@@ -82,7 +89,7 @@ brew install uv
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-Установите сам CLI (клон не нужен — команда `appmetrica` появится в `PATH`):
+Затем установите сам CLI (клон не нужен — команда `appmetrica` появится в `PATH`):
 
 ```bash
 uv tool install git+https://github.com/ampersante/appmetrica-cli
@@ -285,7 +292,6 @@ $ appmetrica mcp
 Пока не реализовано — не считайте, что это уже доступно:
 
 - [ ] Проверка на живом аккаунте Logs API: перекрёстная сверка локальных DAU, сессий, установок и воронок с собственными отчётами AppMetrica
-- [ ] Формула Homebrew (свой tap) — до тех пор: `uv tool install git+https://github.com/ampersante/appmetrica-cli`
 - [ ] Проверка Credential Manager на реальной Windows (пока только юнит-тесты с мок-бэкендом)
 - [ ] Выбор лицензии (см. ниже)
 

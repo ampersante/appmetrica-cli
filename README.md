@@ -68,7 +68,14 @@ flowchart LR
 
 ## Quick start
 
-Requires [uv](https://docs.astral.sh/uv/) — it installs the Python ≥3.10 the project needs by itself.
+**macOS with Homebrew** — the shortest path, nothing else to install:
+
+```bash
+brew install ampersante/tap/appmetrica-cli
+appmetrica --version
+```
+
+**Any platform with [uv](https://docs.astral.sh/uv/)** — install uv first (it also provides the Python ≥3.10 the project needs):
 
 ```bash
 # macOS or Linux
@@ -82,7 +89,7 @@ brew install uv
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-Install the CLI itself (no clone needed — puts `appmetrica` on your `PATH`):
+Then install the CLI itself (no clone needed — puts `appmetrica` on your `PATH`):
 
 ```bash
 uv tool install git+https://github.com/ampersante/appmetrica-cli
@@ -284,7 +291,6 @@ The local-store tools work on what you have synced: `sync` fetches Logs API part
 
 Not available yet — do not assume these exist:
 
-- [ ] Homebrew formula (own tap) — until then: `uv tool install git+https://github.com/ampersante/appmetrica-cli`
 - [ ] Verification against a live Logs API account: cross-check local DAU, sessions, installs and funnel numbers with AppMetrica's own reports
 - [ ] Windows live check of the Credential Manager backend (unit-tested with a mocked backend only so far)
 - [ ] License decision (see below)
