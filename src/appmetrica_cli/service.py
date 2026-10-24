@@ -182,7 +182,7 @@ async def reconcile_a1(
             date2=date2,
             limit=10_000,
         )
-    api_users = _series(general, 2)
+    api_users = _series(general, 0)
     api_sessions = _series(general, 1)
     api_installs = _series(installs, 0)
 

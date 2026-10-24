@@ -16,6 +16,7 @@ from appmetrica_cli.client import AppMetricaClient, AppMetricaError
 from appmetrica_cli.config import AppMetricaConfig, home_dir
 from appmetrica_cli.fx import FxError
 from appmetrica_cli.sandbox import SandboxError
+from appmetrica_cli.service import ServiceError
 from appmetrica_cli.storage import TABLES, StorageError
 
 
