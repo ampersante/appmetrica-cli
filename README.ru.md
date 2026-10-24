@@ -68,7 +68,19 @@ flowchart LR
 
 ## Быстрый старт
 
-Нужен Python ≥3.10 и [uv](https://docs.astral.sh/uv/).
+Нужен [uv](https://docs.astral.sh/uv/) — он сам установит требуемый проектом Python ≥3.10.
+
+```bash
+# macOS или Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# или, если есть Homebrew:
+brew install uv
+```
+
+```powershell
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
 
 Пошаговый гайд для не-разработчиков: [docs/setup-guide.md](./docs/setup-guide.md).
 
